@@ -1,0 +1,132 @@
+{
+  "version": "1.0",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 7870,
+    "log_level": "info",
+    "cors_origins": [
+      "*"
+    ],
+    "server_aliases": [
+      "localhost",
+      "127.0.0.1",
+      "Wilsons-MacBook-Pro.local",
+      "wilsons-macbook-pro.local",
+      "10.10.22.96",
+      "198.18.0.1",
+      "10.211.55.2",
+      "10.37.129.2",
+      "10.0.0.3",
+      "169.254.83.168"
+    ],
+    "sse_keepalive_mode": "chunk",
+    "auto_start_on_launch": true,
+    "burst_decode_mode": "balanced",
+    "preserve_mid_system_cache": true,
+    "distributed_inference_enabled": false
+  },
+  "model": {
+    "model_dirs": [
+      "/Users/wilsonxu/Models/mlx"
+    ],
+    "model_dir": "/Users/wilsonxu/Models/mlx",
+    "model_fallback": false,
+    "hide_helper_models": false
+  },
+  "memory": {
+    "prefill_memory_guard": true,
+    "memory_guard_tier": "balanced",
+    "memory_guard_custom_ceiling_gb": 0.0,
+    "soft_threshold": 0.85,
+    "hard_threshold": 0.95,
+    "prefill_safe_zone_ratio": 0.8,
+    "prefill_min_chunk_tokens": 32
+  },
+  "scheduler": {
+    "max_concurrent_requests": 4,
+    "embedding_batch_size": 32,
+    "chunked_prefill": false,
+    "prefill_priority": "context",
+    "decode_fairness": true
+  },
+  "cache": {
+    "enabled": true,
+    "hot_cache_only": false,
+    "gdn_ssd_split_enabled": true,
+    "gdn_snapshot_storage": "auto",
+    "gdn_ssd_pending_max_size": "512MB",
+    "gdn_sidecar_precision": "fp32",
+    "ssd_cache_dir": "/Users/wilsonxu/.omlx/cache",
+    "ssd_cache_max_size": "20GB",
+    "hot_cache_max_size": "12GB",
+    "initial_cache_blocks": 512
+  },
+  "auth": {
+    "api_key": "<REDACTED>",
+    "secret_key": "<REDACTED>"
+  },
+  "mcp": {
+    "config_path": null,
+    "expose_tools": true
+  },
+  "huggingface": {
+    "endpoint": "",
+    "hf_cache_enabled": true
+  },
+  "modelscope": {
+    "endpoint": ""
+  },
+  "network": {
+    "http_proxy": "",
+    "https_proxy": "",
+    "no_proxy": "",
+    "ca_bundle": ""
+  },
+  "sampling": {
+    "max_context_window": 65536,
+    "max_context_window_policy": null,
+    "max_tokens": 32768,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 0,
+    "repetition_penalty": 1.0
+  },
+  "logging": {
+    "log_dir": null,
+    "retention_days": 7
+  },
+  "claude_code": {
+    "mode": "local",
+    "opus_model": "huihui-qwen3.8-27b-abliterated-q4k-l",
+    "sonnet_model": "huihui-qwen3.8-27b-abliterated-q4k-l",
+    "haiku_model": "huihui-qwen3.8-27b-abliterated-q4k-l"
+  },
+  "integrations": {
+    "codex_model": null,
+    "opencode_model": null,
+    "openclaw_model": null,
+    "hermes_model": null,
+    "pi_model": null,
+    "copilot_model": null,
+    "openclaw_tools_profile": "coding",
+    "markitdown_enabled": true,
+    "markitdown_expose_model": false,
+    "markitdown_max_file_size_mb": 25,
+    "markitdown_max_files_per_request": 5,
+    "markitdown_pdf_processing_engine": "markitdown",
+    "web_search_provider": "ddgs",
+    "web_search_brave_api_key": "",
+    "web_search_searxng_url": "",
+    "web_search_ddgs_backends": "",
+    "web_search_max_results": 3,
+    "web_search_content_mode": "snippet",
+    "web_search_content_truncate": true,
+    "web_search_content_max_chars": 20000
+  },
+  "ui": {
+    "language": "en"
+  },
+  "idle_timeout": {
+    "idle_timeout_seconds": null
+  }
+}

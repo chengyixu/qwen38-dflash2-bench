@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "models": {
+    "Qwen3.8-27B-4bit": {
+      "dflash_enabled": true,
+      "dflash_draft_model": "/Users/wilsonxu/Models/mlx/Qwen3.8-27B-DFlash2",
+      "dflash_draft_quant_enabled": true,
+      "dflash_draft_quant_weight_bits": 4,
+      "dflash_draft_quant_activation_bits": 16,
+      "dflash_draft_quant_group_size": 64,
+      "dflash_block_size": 5,
+      "dflash_verify_mode": null,
+      "dflash_in_memory_cache": true,
+      "dflash_ssd_cache": false,
+      "is_default": false,
+      "display_name": "Qwen3.8-27B 4bit + DFlash2"
+    }
+  }
+}

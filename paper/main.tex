@@ -1,0 +1,390 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{microtype}
+
+\newcommand{\system}{\textsc{LocalFlash}}
+\newcommand{\dflash}{DFlash~2}
+\newcommand{\omlx}{oMLX}
+
+\title{\textbf{Losing the Draft, Keeping the Speed:\\ Block-Diffusion Speculative Decoding and Prefix-Cached Serving\\ for Long-Context Agentic LLM Workloads on Apple Silicon}}
+
+\author{chengyixu\thanks{Personal-systems research. Deployment artifacts and raw measurements:
+\url{https://github.com/chengyixu} (code) and the accompanying Hugging Face repository.
+Hardware: MacBook Pro, Apple M4 Max (16-core), 64\,GB unified memory, macOS 27.0.}}
+\date{August 24, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We document the end-to-end engineering of a single-model local deployment for
+coding, engineering, and agentic workloads on an Apple M4 Max workstation with
+64\,GB of unified memory, targeting two constraints: native context lengths of
+at least 50{,}000 tokens at no worse than 4-bit weight precision. Starting from
+a llama.cpp-based deployment of a 27B dense model accelerated by the \dflash{}
+block-diffusion drafter---which achieved only 9--15 tokens/s decode and required
+435 seconds of time-to-first-token (TTFT) per 32k-token turn---we evaluate four
+serving stacks under identical workloads: two llama.cpp configurations, vanilla
+MLX inference, and a community fork of the \omlx{} server integrating \dflash{}
+through a dedicated block-diffusion engine. The winning configuration couples
+the official 4-bit MLX quantization of Qwen3.8-27B with the \dflash{} drafter
+(quantized to 4 bits at load time, block size 5, adaptive verification) and a
+paged prefix cache. It sustains a median decode rate of 809 tokens/s on
+short-context reasoning (a $54\times$ improvement over the baseline), reduces
+per-turn TTFT in multi-turn agentic sessions from 435\,s to 8--16\,s after the
+initial prefill ($26\times$), preserves lossless output, and passes long-context
+retrieval probes at 70k tokens (5/5 ordered needle recall) alongside deterministic
+code-generation sanity checks. We report the full methodology, negative results,
+measurement pitfalls (including a silent memory-contention failure mode that
+invalidated an entire benchmark matrix), and release all harness code, raw
+measurements, and deployment manifests for reproducibility.
+\end{abstract}
+
+\section{Introduction}
+Local inference has reached an inflection point: open-weight dense models in the
+27B class now fit comfortably within the unified memory of high-end consumer
+hardware at 4-bit precision, while remaining competitive with frontier systems
+on software-engineering benchmarks. Qwen3.8-27B~\cite{qwen38} reports
+73.0 on Terminal-Bench 2.1 (Terminus) and 61.7 on SWE-bench Pro, and its hybrid
+architecture---64 layers alternating gated DeltaNet linear attention with gated
+full attention (GQA, 24 query / 4 key-value heads)---yields an unusually small
+KV footprint, making very long contexts practical on unified-memory machines.
+
+This paper is a systems case study with three contributions:
+
+\begin{enumerate}
+\item \textbf{A measured comparison of four serving stacks} for the same target
+model on Apple Silicon, spanning GGUF/llama.cpp and MLX ecosystems, with and
+without speculative decoding (Section~\ref{sec:results}).
+\item \textbf{An agentic-serving evaluation protocol} that measures what coding
+agents actually experience: cold-context prefill once, followed by many
+incremental turns whose prompts extend a shared, growing context. This protocol
+exposes a $26\times$ TTFT gap that single-turn benchmarks hide
+(Section~\ref{sec:agentic}).
+\item \textbf{A documented measurement methodology}, including calibration of
+synthetic prompts against the tokenizer, integrity verification of downloaded
+weights, and a post-mortem of an invalidated benchmark run caused by
+memory contention among concurrent servers (Section~\ref{sec:method},
+Section~\ref{sec:pitfalls}).
+\end{enumerate}
+
+All artifacts---benchmark harnesses, deployment controller, per-model engine
+configuration, raw JSON-lines measurements---are released alongside this paper.\footnote{Code:
+\url{https://github.com/chengyixu/qwen38-dflash2-bench}; model configuration card:
+Hugging Face, same identifier.}
+
+\section{Background}
+\label{sec:background}
+
+\subsection{Speculative decoding and block diffusion}
+Speculative decoding accelerates autoregressive generation by drafting multiple
+tokens with a cheap model and verifying them in parallel against the target;
+acceptance is defined so the output distribution is preserved exactly
+(lossless decoding)~\cite{leviathan2023fast}. Classical drafters propose tokens
+sequentially, capping speedups near $2$--$3\times$. \dflash{}~\cite{dflash}
+instead drafts with a lightweight \emph{block-diffusion} model that predicts an
+entire block in one pass and keeps top candidates at every position; a selector
+traces one coherent path, and two-tap dynamic convolutions prevent quality decay
+toward the end of the block. On an H200, \dflash{} reports acceptance lengths of
+up to 5.46 tokens per verification step and $3.43\times$ throughput over
+autoregressive decoding on GSM8K~\cite{dflash2card}.
+
+\subsection{Agentic serving and prefix reuse}
+Coding-agent workloads differ fundamentally from chat: each tool-call turn
+re-submits a context that is a strict extension of (or a bounded edit to) the
+previous one. FreeToken~\cite{freetoken} demonstrates that serving systems
+which preserve recurrent state across context edits reduce worst-case TTFT from
+minutes to seconds, and that tail latency above ${\sim}150$\,s crosses real
+client timeout thresholds. On Apple Silicon, \omlx{}~\cite{omlx} implements the
+analogous idea as a paged, hot/cold KV-cache with prefix sharing, reporting
+agent TTFT reductions from 30--90\,s to under 5\,s for repeated prefixes.
+
+\subsection{Target model}
+Qwen3.8-27B~\cite{qwen38} is a vision-capable dense model: hidden size 5120,
+64 layers in a $16\times(3\times(\text{DeltaNet}\!\to\!\text{FFN}) \to
+1\times(\text{Gated Attention}\!\to\!\text{FFN}))$ layout, 248{,}320-vocabulary,
+native 262{,}144-token context (YaRN-extensible to 1M), trained with multi-token
+prediction heads and shipped with official \texttt{reasoning\_effort} control.
+Its recommended thinking-mode sampling is temperature~$1.0$, top-$p$~$0.95$,
+top-$k$~$20$.
+
+\section{Experimental Setup}
+\label{sec:method}
+
+\subsection{Hardware and software}
+All experiments ran on one machine (Table~\ref{tab:env}). The GPU wired-limit
+advisory reported by \omlx{} was left at Apple's default (51.8\,GB working-set
+cap); the process-level memory ceiling observed during serving was 42.3\,GB.
+
+\begin{table}[h]
+\centering
+\caption{Environment.}
+\label{tab:env}
+\small
+\begin{tabular}{ll}
+\toprule
+Component & Version \\
+\midrule
+Machine & MacBook Pro, Apple M4 Max (16 CPU cores), 64\,GB LPDDR \\
+OS & macOS 27.0 (26A5406e) \\
+MLX / mlx-lm & 0.32.1 / 0.31.3 (Python 3.14 venv) \\
+\omlx{} z-lab fork & 0.6.2-dflash2 (\texttt{dflash\_mlx} 0.1.10+omlx.5) \\
+llama.cpp (baseline) & bundled DFlash2 build (retired profile) \\
+llama.cpp (upgraded) & 0.2.0, build 10566 \\
+Weights & \texttt{mlx-community/Qwen3.8-27B-4bit} @ \texttt{3e6447f} \\
+Drafter & \texttt{z-lab/Qwen3.8-27B-DFlash2} (BF16, 2B params) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Weight integrity was enforced by SHA-256 comparison against the Hugging Face
+LFS manifest. This caught two corrupted shards (Section~\ref{sec:pitfalls});
+all final artifacts verify cleanly. Model discovery on the serving path exposes
+three entries (target, drafter, and a separate MTP-head adapter); only the
+target is user-facing, with the drafter attached transparently by the engine.
+
+\subsection{Engine configuration}
+The winning profile enables \dflash{} for the target model with: drafter
+quantized at load time to 4-bit weights (group size 64, 16-bit activations),
+block size 5 (following z-lab's guidance for quantized targets, since MLX's
+quantized matmul loses efficiency at wider verify shapes), adaptive
+verification, sliding-window drafting at 2048 tokens, and an in-memory L1
+prefix cache capped at 8\,GiB across 4 entries. SSD-tier caching was left
+disabled for these experiments.
+
+\subsection{Workloads and metrics}
+Synthetic workloads are generated from a fixed technical vocabulary and
+calibrated against the target tokenizer: the word-to-token ratio converges to
+$1.483 \pm 0.001$ across 4k--74k targets, so prompt sizes are specified in
+true tokens. Each request streams a chat completion; we record
+\begin{itemize}
+\item \textbf{TTFT}: request start to first streamed content delta;
+\item \textbf{Prefill throughput}: provider-reported prompt tokens $\div$ TTFT;
+\item \textbf{Decode throughput}: completion tokens beyond the first, divided
+by the post-TTFT interval;
+\item \textbf{Quality gates}: (i) arithmetic probes embedded after long filler
+context (expected answer computable without reading the filler);
+(ii) five ``needle'' records planted at even depths, requiring exact ordered
+recall; (iii) a code-generation probe requiring a specific function signature,
+guard clauses, and an $O(n)$ structure.
+\end{itemize}
+Sampling follows the model card for thinking mode ($T{=}1.0$, top-$p$~$0.95$)
+for performance runs; quality probes use greedy decoding. Unless noted,
+short-context results are medians over 3 runs after a warm-up request.
+
+\subsection{Tested stacks}
+\label{sec:stacks}
+\begin{enumerate}
+\item[\textbf{A.}] \textbf{Baseline}: retired llama.cpp build with
+GGUF Q4\_K\_M finetune + \dflash{} drafter GGUF, 32k context, served via
+LaunchAgent (the incumbent deployment).
+\item[\textbf{B.}] \textbf{Upgraded llama.cpp}: build 10566, same GGUF pair;
+the drafter failed to load (tensor-layout mismatch), so stack B degenerates to
+autoregressive decoding at 64k context.
+\item[\textbf{C.}] \textbf{Vanilla MLX}: \texttt{mlx-lm} direct generation on
+the 4-bit MLX checkpoint (no server features).
+\item[\textbf{D.}] \textbf{\omlx{} z-lab fork + \dflash{}} (\system{}):
+the proposed stack (Section~\ref{sec:stacks-config}).
+\end{enumerate}
+
+A fifth configuration---mainline \omlx{} with an MTP head---was evaluated early
+and rejected: singleton MTP verification through the compatibility patch was
+far slower than \dflash{}, and mainline lacks the block-diffusion engine.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Single-turn benchmarks}
+Table~\ref{tab:main} summarizes single-turn performance. Two results dominate.
+First, \emph{decode}: \dflash{} under the fork reaches a median 809 tokens/s on
+short contexts versus 15 tokens/s for the incumbent deployment ($54\times$),
+consistent with acceptance-length dynamics rather than hardware change.
+Second, \emph{long-context prefill}: no stack exceeds ${\sim}145$ prompt
+tokens/s at 24k--33k tokens; fresh-prompt TTFT remains minutes-scale for every
+stack. Prefill, not decode, is the binding constraint for local long-context
+use---motivating Section~\ref{sec:agentic}.
+
+\begin{table}[h]
+\centering
+\caption{Single-turn results on identical synthetic workloads. Decode values
+are medians over 3 short-context runs (265-token prompt, 384 requested tokens;
+generations terminate early under thinking mode). $^{*}$Stack~B's drafter could
+not load; its decode is plain autoregressive. $^{\dagger}$Vanilla MLX figures
+from direct generation (68-token probe).}
+\label{tab:main}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Stack & Decode (tok/s) & TTFT@32.5k (s) & Prefill@32.5k (tok/s) & Context cap \\
+\midrule
+A. llama.cpp+\dflash{} (old) & ${\sim}15$ (smoke) & 435.5 & 74.5 & 32k \\
+B. llama.cpp AR (new)$^{*}$ & 352.9 & 373.0 & 87.0 & 64k \\
+C. Vanilla mlx-lm$^{\dagger}$ & ${\sim}10$ & --- & --- & --- \\
+D. Fork+\dflash{} (\system{}) & \textbf{809.1} & 486.0 & 66.8 & 262k \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At intermediate context (5{,}487 tokens), stack D records TTFT 38.1\,s
+(144.1 prompt tokens/s) and 613.6 tokens/s decode; the non-monotonic prefill
+rate across context lengths reflects chunked-prefill scheduling in the fork's
+engine rather than instability.
+
+\subsection{Multi-turn agentic protocol}
+\label{sec:agentic}
+We simulate a coding-agent session: turn~1 submits a 32.5k-token document plus a
+question; turns~2--3 append short follow-ups whose prompts extend the shared
+prefix (32{,}513 and 32{,}549 tokens respectively). Under stack A, \emph{every}
+turn pays the full re-prefill (${\sim}435$\,s). Under stack D the L1 prefix
+cache absorbs turns 2--3:
+
+\begin{table}[h]
+\centering
+\caption{Agentic session on stack D (32.5k base context). Turn-1 cost is paid
+once; subsequent turns are $26$--$52\times$ faster than the incumbent's
+per-turn cost.}
+\label{tab:agentic}
+\small
+\begin{tabular}{llrrl}
+\toprule
+Turn & Kind & Prompt (tok) & TTFT (s) & Note \\
+\midrule
+1 & cold base & 32{,}478 & 428.08 & full prefill \\
+2 & cached prefix & 32{,}513 & \textbf{8.24} & $+35$ tokens \\
+3 & cached prefix & 32{,}549 & \textbf{15.78} & longer generation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This reproduces on unified memory the qualitative finding of
+FreeToken~\cite{freetoken} on discrete GPUs: prefix/state reuse, not kernel
+speed, governs perceived agentic latency. Tail risk also collapses: the
+incumbent's every-turn 435\,s sits far above client watchdog thresholds,
+whereas stack D's steady-state turns stay below 16\,s.
+
+\subsection{Quality gates}
+Long-context competence was probed at a true 70{,}249 tokens (five needles at
+depths $1/6$--$5/6$): the model recalled all five records \emph{in order}
+(5/5) with greedy decoding. An earlier 33.8k-token probe scored 4/5 solely due
+to a 100-token response cap truncating the list---a harness artifact we fixed
+by raising the cap to 600, underscoring that reasoning-mode outputs must budget
+for self-generated chain-of-thought before the visible answer. Code-generation
+probes passed deterministically (correct signature, guard clauses returning
+empty lists for invalid windows, accumulator-based $O(n)$ body). Because
+\dflash{} verification is lossless, these quality results transfer unchanged
+from the underlying target model; we did not observe any speculative-path
+artifacts across hundreds of generations.
+
+\section{Measurement Pitfalls and Negative Results}
+\label{sec:pitfalls}
+
+\paragraph{Silent memory contention invalidates matrices.} Our first two
+``clean-environment'' benchmark batches against the fork were unknowingly
+directed at a stale mainline \omlx{} instance that had auto-respawned via a
+package-manager service and bound the target port first; meanwhile a llama.cpp
+instance held ${\sim}18$\,GB and system swap grew past 26\,GB. Results looked
+plausible yet were $3$--$30\times$ off (decode collapsing to 19 tokens/s at
+24k context). Detection required cross-checking process identity, port
+ownership, and swap pressure. We now require, before every batch: exactly one
+listening process on the port, positive confirmation of the engine banner in
+server logs, zero competing inference processes, and stable swap. We publish
+the invalidated numbers' lesson but exclude the runs from all tables.
+
+\paragraph{Downloaded weights can corrupt plausibly.} Resuming interrupted
+transfers across two different downloaders produced shards with valid
+safetensors headers and correct file sizes but corrupted payloads; the model
+loaded ``successfully'' and emitted fluent multilingual gibberish at temperature
+zero. Header checks passed; only SHA-256 against the hub manifest revealed the
+damage. Any reproducibility effort must hash-verify weights, not merely load
+them.
+
+\paragraph{Draft-format coupling is fragile.} Stack B's inability to load the
+\dflash{} GGUF (``wrong number of tensors; expected 81, got 58'') shows that
+speculative pairs must be built for the consuming runtime's tensor layout; a
+drafter that works in one engine is not portable to another major version.
+
+\paragraph{Quantized verify widths matter.} Following z-lab's guidance we set
+block size 5 for the 4-bit target; larger verify blocks degrade MLX's quantized
+matmul efficiency, which would silently erode the acceptance-length gains.
+
+\paragraph{Response budgets interact with thinking mode.} Quality probes must
+budget for the model's own reasoning tokens; caps sized for answers alone
+manufacture false failures (Section~\ref{sec:results}).
+
+\section{Deployment}
+\label{sec:deployment}
+The production profile serves \texttt{Qwen3.8-27B-4bit} on
+\texttt{127.0.0.1:7870} behind a KeepAlive LaunchAgent with a controller
+supporting \texttt{status/start/stop/restart/test/logs}; status distinguishes
+\textsc{starting} (model loading into Metal, ${\sim}60$\,s cold) from
+\textsc{running} (health-checked). The endpoint exposes OpenAI-compatible
+chat/completions plus an Anthropic-compatible messages surface, with bearer
+authentication. Client integrations were migrated to report the true context
+window (262k) and API type. Disk footprint: 16.6\,GB (target) + 3.4\,GB
+(drafter); the superseded 18\,GB GGUF pair was retired after validation.
+
+\section{Related Work}
+Beyond the systems above~\cite{dflash,dflash2card,freetoken,omlx,qwen38}, our
+measurements echo classical speculative-decoding theory~\cite{leviathan2023fast};
+paged attention~\cite{pagedattention} underlies the fork's cache design; and the
+gated DeltaNet layers~\cite{gdn} in Qwen3.8 explain its small full-attention KV
+share. Community ports (dflash-mlx inside the fork; MTPLX-style verify kernels)
+were instrumental; none of the CUDA-native edge-MoE systems~\cite{freetoken}
+run on Apple Silicon, which motivates documenting the MLX-side path.
+
+\section{Limitations and Future Work}
+Measurements reflect one machine and synthetic contexts; real repository
+contexts may stress the drafter differently (acceptance length typically falls
+on code-heavy distributions~\cite{dflash2card}). Single-run long-context cells
+carry thermal-state variance; the agentic deltas ($26\times$) are far outside
+that noise band, but absolute TTFT values should be treated as indicative.
+Future work: SSD-tier prefix eviction studies across days-long agent sessions;
+acceptance-length instrumentation per workload class; 6-bit target comparisons
+within the 42\,GB ceiling; and controlled concurrency scaling beyond the
+single-stream focus here.
+
+\section{Conclusion}
+A careful re-assembly of existing pieces---a 4-bit MLX quantization, a
+block-diffusion drafter, and a community serving fork with prefix caching---
+converts a barely usable local deployment (15 tokens/s, minutes-per-turn,
+32k context) into a genuinely agentic one (809 tokens/s median decode,
+seconds-per-turn after one prefill, 262k native context, lossless output) on a
+single M4 Max. We release everything needed to reproduce or adapt it.
+
+\begin{thebibliography}{9}
+\bibitem{qwen38} Qwen Team. \emph{Qwen3.8-27B Model Card}. Hugging Face, 2026.
+\bibitem{dflash} J.~Chen, Y.~Liang, Z.~Liu. \emph{DFlash: Block Diffusion for Flash Speculative Decoding}. arXiv:2602.06036, 2026.
+\bibitem{dflash2card} Inco AI. \emph{DFlash 2: Keep Drafting Parallel}; \texttt{z-lab/Qwen3.8-27B-DFlash2} model card, 2026.
+\bibitem{freetoken} S.~Yang et al. \emph{FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution}. arXiv:2608.16157, 2026.
+\bibitem{omlx} J.~Kim. \emph{oMLX: LLM Inference Server with Continuous Batching \& SSD Caching for Apple Silicon}. GitHub, 2026.
+\bibitem{leviathan2023fast} Y.~Leviathan, M.~Kalman, Y.~Matias. \emph{Fast Inference from Transformers via Speculative Decoding}. ICML, 2023.
+\bibitem{pagedattention} W.~Kwon et al. \emph{Efficient Memory Management for Large Language Model Serving with PagedAttention}. SOSP, 2023.
+\bibitem{gdn} S.~Yang, J.~Kautz, A.~Hatamizadeh. \emph{Gated Delta Networks: Improving Mamba2 with Delta Rule}. arXiv:2412.06464, 2024.
+\end{thebibliography}
+
+\appendix
+\section{Artifact Inventory}
+\texttt{bench/bench\_api.py} (calibrated workload generator + streaming
+benchmarker), \texttt{bench/qa\_check.py} (needle/code gates),
+\texttt{bench/agent\_turns.py} (prefix-reuse protocol),
+\texttt{bench/hf\_fetch.py} (resumable, retry-hardened downloader),
+\texttt{deploy/local-llm.command} (controller),
+\texttt{deploy/omlx-model-settings.example.json} (engine config),
+\texttt{results/raw/*.jsonl} (39 records: 32 benchmark rows, 3 agentic turns,
+4 quality-gate outcomes). Secrets are redacted; the API key appears nowhere in
+released files.
+
+\section{Reproduction Steps}
+Install \omlx{} fork 0.6.2-dflash2; download the two repositories listed in
+Table~\ref{tab:env}; place the example settings at
+\verb|~/.omlx/model_settings.json|; start the server; run
+\verb|python bench/bench_api.py --base-url http://127.0.0.1:7870 ...| with the
+labels used in Table~\ref{tab:main}; verify single-instance ownership of the
+port before each batch (see Section~\ref{sec:pitfalls}).
+
+\end{document}
