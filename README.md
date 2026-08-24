@@ -56,6 +56,9 @@ state reuse, not kernel speed, governs perceived agentic latency.
 ## Quickstart (reproduce)
 
 ```bash
+# 0. The controller requires your server API key:
+export LOCAL_LLM_API_KEY="<your omlx api key>"   # stored in ~/.omlx/settings.json
+
 # 1. Install the z-lab oMLX fork (0.6.2-dflash2) from
 #    https://github.com/z-lab/omlx-fork/releases
 # 2. Fetch weights (hash-verified):

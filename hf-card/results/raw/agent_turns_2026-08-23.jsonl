@@ -1,0 +1,3 @@
+{"turn": 1, "kind": "cold_base", "ttft_s": 428.08, "total_s": 428.41, "prompt_tokens": 32478, "gen_tokens": 90, "head": "  391"}
+{"turn": 2, "kind": "cached_prefix", "ttft_s": 8.24, "total_s": 8.5, "prompt_tokens": 32513, "gen_tokens": 98, "head": "  1457"}
+{"turn": 3, "kind": "cached_prefix_longer_answer", "ttft_s": 15.78, "total_s": 17.89, "prompt_tokens": 32549, "gen_tokens": 155, "head": "  It covers high-performance computing and machine-learning "}

@@ -43,8 +43,18 @@ Raw measurement records: [GitHub repo](https://github.com/chengyixu/qwen38-dflas
 No weight files are hosted here — use the upstream artifacts:
 
 - Target: [`mlx-community/Qwen3.8-27B-4bit`](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit)
-- Drafter: [`z-lab/Qwen3.8-27B-DFlash2`](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2)
+- Drafter: [`z-lab/Qwen3.8-27B-DFlash2`](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) (BF16; quantize at load with the engine config below — pre-quantized drafter files have no consumer loader yet, see `bench/convert_dflash_4bit.py`)
 - Server: [`z-lab/omlx-fork` release `0.6.2-dflash2`](https://github.com/z-lab/omlx-fork/releases)
+
+This repo ships the **research package**:
+
+```
+├── README.md            this card (recipe + measured results)
+├── main.pdf             the full paper (methodology, tables, pitfalls)
+├── bench/               calibrated benchmark & QA harnesses
+├── deploy/              production controller + engine config
+└── results/raw/*.jsonl  39 raw measurement records
+```
 
 ## Engine configuration
 
