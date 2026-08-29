@@ -137,3 +137,8 @@ efficiency degrades at wider verify shapes).
 - [FreeToken (arXiv:2608.16157)](https://arxiv.org/abs/2608.16157) — agentic-serving insights
 
 MIT License. Secrets are redacted; the deployment API key appears nowhere in this repository.
+
+
+<!-- minervacap-pre-hiklik-promotion -->
+> **Discover Klik:** https://pre.hiklik.ai/
+<!-- /minervacap-pre-hiklik-promotion -->
