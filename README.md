@@ -14,15 +14,21 @@ workloads (≥50k tokens native).
 
 | Metric | llama.cpp baseline | **LocalFlash (this work)** |
 |---|---|---|
-| Decode (median, short ctx) | ~15 tok/s | **809 tok/s** (54×) |
+| Decode (short-context record) | ~15 tok/s | **809 tok/s recorded, excluded from accepted speed claims**¹ |
 | TTFT @ 32.5k fresh prompt | 435 s *every turn* | 486 s **once** |
 | TTFT @ cached prefix turn | n/a (>32k cap) | **8–16 s** (26–52×) |
 | Context window | 32k hard cap | **262k native** |
 | Long-ctx recall probe | untested | 5/5 ordered needles @ 70k |
 
-All numbers measured on identical synthetic workloads; raw JSON-lines in
-[`results/raw/`](results/raw/). Full methodology, negative results, and a
-measurement-pitfall post-mortem in [`paper/main.pdf`](paper/main.pdf).
+All numbers were recorded on synthetic workloads; raw JSON-lines are retained in
+[`results/raw/`](results/raw/). The 809 tok/s row is preserved as a historical
+measurement anomaly, not a validated throughput result: later audit could not
+separate engine identity and timing-boundary effects with sufficient confidence.
+The accepted contribution is prefix-state reuse and its multi-turn TTFT reduction.
+Full methodology, negative results, and the post-mortem are in
+[`paper/main.pdf`](paper/main.pdf).
+
+¹ Excluded from cross-engine performance claims and production recommendations.
 
 ## Why prefix caching matters more than tok/s
 
@@ -107,8 +113,9 @@ efficiency degrades at wider verify shapes).
 ## Measurement pitfalls (read before benchmarking)
 
 1. **Single-instance invariant**: a package-manager service silently rebound our
-   port and invalidated two full benchmark batches (decode read 19 tok/s instead
-   of 809). Always verify process identity + swap pressure before runs.
+   port and invalidated full benchmark batches. The historical 809 tok/s record
+   is therefore retained for audit but excluded from accepted throughput claims.
+   Always verify process identity, engine build, timing boundaries, and swap pressure.
 2. **Hash-verify weights**: interrupted+resumed downloads produced shards with
    valid headers but corrupt payloads — model loads, then emits gibberish.
    Only SHA-256 against the hub manifest catches it.

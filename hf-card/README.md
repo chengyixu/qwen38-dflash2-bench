@@ -30,13 +30,15 @@ z-lab **oMLX fork**, tuned for long-context coding-agent workloads on an M4 Max 
 
 | Metric | llama.cpp baseline | This configuration |
 |---|---|---|
-| Decode (median) | ~15 tok/s | **809 tok/s** |
+| Decode (historical short-context record) | ~15 tok/s | **809 tok/s recorded; excluded from accepted claims**¹ |
 | TTFT @ 32.5k fresh prompt | 435 s every turn | 486 s once |
 | TTFT @ cached prefix turn | — | **8–16 s** |
 | Context window | 32k | 262k native |
 | Needle recall @ 70k | — | 5/5 ordered |
 
 Raw measurement records: [GitHub repo](https://github.com/chengyixu/qwen38-dflash2-bench) → `results/raw/`.
+
+¹ The 809 tok/s record is retained for historical audit but excluded from validated throughput claims because later measurement-boundary and engine-identity checks could not reproduce it with sufficient confidence.
 
 ## Files
 
