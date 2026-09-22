@@ -103,7 +103,7 @@ xhigh/medium/low via the server's chat-template kwargs.
 ```bibtex
 @misc{localflash2026,
   title={Losing the Draft, Keeping the Speed},
-  author={KLIK team},
+  author={Xu, Chengyi and {{KLIK team}}},
   year={2026},
   url={https://github.com/chengyixu/qwen38-dflash2-bench}
 }

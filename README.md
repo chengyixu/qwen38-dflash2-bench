@@ -129,7 +129,7 @@ efficiency degrades at wider verify shapes).
   title={Losing the Draft, Keeping the Speed: Block-Diffusion Speculative
          Decoding and Prefix-Cached Serving for Long-Context Agentic LLM
          Workloads on Apple Silicon},
-  author={KLIK team},
+  author={Xu, Chengyi and {{KLIK team}}},
   year={2026},
   url={https://github.com/chengyixu/qwen38-dflash2-bench}
 }
