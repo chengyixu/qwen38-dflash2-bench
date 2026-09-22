@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "Losing the Draft, Keeping the Speed"
+message: "If you use this artifact, please cite the paper and repository."
+type: article
+authors:
+  - name: "KLIK team"
+repository-code: "https://github.com/chengyixu/qwen38-dflash2-bench"
+url: "https://github.com/chengyixu/qwen38-dflash2-bench"
+license: MIT
+version: 1.0.0
+date-released: 2026-08-24
